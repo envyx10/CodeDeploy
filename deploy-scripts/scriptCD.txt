@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Plantilla Basica Ubuntu, Tomcat, Security Group
+
+# Par?metros
+Parameters:
+  InstanceName:
+    Description: Nombre de la instancia
+    Type: String
+    Default: Tomcat
+  InstanceTypeParameter:
+    Description: Enter t2.micro, t2.small, or t2.nano. Default is t2.micro. 
+    Type: String
+    Default: t2.large
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.nano
+      - t2.large
+  InstanceImage:
+    Description: Instance AMI 
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: '/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
+
+# Recursos
+Resources:
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH to client host
+      GroupName: SSHSecurityGroup
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+  Tomcat:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+        Count: 1
+    Properties:
+      ImageId: !Ref InstanceImage
+      InstanceType: !Ref InstanceTypeParameter
+      KeyName: vockey
+      SecurityGroups:
+        - !Ref SSHSecurityGroup
+      Tags:
+        - Key: Name
+          Value: TomcatInstance
+      UserData: 
+        Fn::Base64: 
+          !Sub |
+            #!/bin/bash -xe
+            exec > /tmp/userdata.log 2>&1
+            #====================================================================#
+            # PREPARAR BOOTSTRAP DE CFN HELPER SCRIPTS
+            #====================================================================#
+            apt update -y
+            apt install python3-pip -y
+            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+            ln -s /usr/local/init/ubuntu/cfn-hup /etc/init.d/cfn-hup
+            #====================================================================#
+            #---------------------> INSTALACI?N DE AGENT <-----------------------#
+            #====================================================================#
+            #Comando para desactivar la actualizaci?n del Kernel
+            sed -i "s/#\$nrconf{kernelhints} = -1;/\$nrconf{kernelhints} = -1;/g" /etc/needrestart/needrestart.conf
+
+            # Actualizamos la instancia
+            apt update
+            apt upgrade -y
+
+            # Instalamos el daemon Agent
+            apt install ruby-full -y
+            apt install wget -y
+
+            cd /home/ubuntu
+            wget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install
+
+            chmod +x ./install
+            ./install auto
+
+            systemctl start codedeploy-agent
+            systemctl status codedeploy-agent
+
+            #====================================================================#
+            #-----------------------> SCRIPT DE TOMCAT <-------------------------#
+            #====================================================================#
+            # Creamos un usuario sin privilegios llamado tomcat
+            useradd -m -d /opt/tomcat -U -s /bin/false tomcat
+
+            # Instalamos jdk21 (Java)
+            apt install openjdk-21-jdk -y
+
+            # Instalamos tomcat11
+            cd /tmp
+            wget https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.36/bin/apache-tomcat-10.1.36.tar.gz
+
+            # Extraemos los ficheros del enlace de arriba
+            tar xzvf apache-tomcat-10*tar.gz -C /opt/tomcat --strip-components=1
+
+            # Modificamos los permisos del usuario tomcat
+            chown -R tomcat:tomcat /opt/tomcat/
+            chmod -R u+x /opt/tomcat/bin
+
+            # Configuramos los usuarios administradores
+            sed -i '/<\/tomcat-users>/i \
+            <role rolename="manager-gui" />\n\
+            <user username="manager" password="manager_secret" roles="manager-gui" />\n\
+            \n\
+            <role rolename="admin-gui" />\n\
+            <user username="admin" password="admin_secret" roles="manager-gui,admin-gui" />' /opt/tomcat/conf/tomcat-users.xml
+
+            # Permitimos el acceso desde cualquier host
+            sed -i '/<Valve /,/\/>/ s|<Valve|<!--<Valve|; /<Valve /,/\/>/ s|/>|/>-->|' /opt/tomcat/webapps/manager/META-INF/context.xml
+            sed -i '/<Valve /,/\/>/ s|<Valve|<!--<Valve|; /<Valve /,/\/>/ s|/>|/>-->|' /opt/tomcat/webapps/host-manager/META-INF/context.xml
+
+            # Creamos un servicio systemd
+            echo '[Unit]
+            Description=Tomcat
+            After=network.target
+
+            [Service]
+            Type=forking
+
+            User=tomcat
+            Group=tomcat
+
+            Environment="JAVA_HOME=/usr/lib/jvm/java-1.21.0-openjdk-amd64"
+            Environment="JAVA_OPTS=-Djava.security.egd=file:///dev/urandom"
+            Environment="CATALINA_BASE=/opt/tomcat"
+            Environment="CATALINA_HOME=/opt/tomcat"
+            Environment="CATALINA_PID=/opt/tomcat/temp/tomcat.pid"
+            Environment="CATALINA_OPTS=-Xms512M -Xmx1024M -server -XX:+UseParallelGC"
+
+            ExecStart=/opt/tomcat/bin/startup.sh
+            ExecStop=/opt/tomcat/bin/shutdown.sh
+
+            RestartSec=10
+            Restart=always
+
+            [Install]
+            WantedBy=multi-user.target' | sudo tee /etc/systemd/system/tomcat.service
+
+            # Recargamos el daemon
+            systemctl daemon-reload
+
+            # Habilitamos tomcat
+            systemctl enable tomcat
+
+            # Iniciamos tomcat
+            #systemctl start tomcat
+            #====================================================================#
+            #              CLONAR REPOSITORIO Y COMPILAR PROYECTO                #
+            #====================================================================#
+            # HE QUITADO ESTE APARTADO
+            
+            # Reiniciamos tomcat
+            # systemctl restart tomcat
+
+            #====================================================================#
+            # Este tiene que ser tu ultima instruccion del script
+            # Recuerda modificar el valor del --resource al id l?gico de la instancia
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource Tomcat --region ${AWS::Region}
+# Salidas
+Outputs:
+  AppHealthPoints:
+    Description: URL del endpoint de salud de la app
+    Value: 
+      Fn::Sub:
+        - "http://${PUBLICDNS}:8080/studentify/api/health"
+        - PUBLICDNS: !GetAtt Tomcat.PublicDnsName
