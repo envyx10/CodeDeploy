@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Plantilla Basica Ubuntu, Tomcat, Security Group
+Description: Plantilla Básica Ubuntu, Tomcat, Security Group
 
 Parameters:
   InstanceName:
@@ -7,7 +7,7 @@ Parameters:
     Type: String
     Default: Tomcat
   InstanceTypeParameter:
-    Description: Enter t2.micro, t2.small, or t2.nano. Default is t2.micro. 
+    Description: Enter t2.micro, t2.small, or t2.nano. Default is t2.micro.
     Type: String
     Default: t2.large
     AllowedValues:
@@ -16,17 +16,52 @@ Parameters:
       - t2.nano
       - t2.large
   InstanceImage:
-    Description: Instance AMI 
+    Description: Instance AMI
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: '/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
 
-# Recursos
 Resources:
+  # IAM Role y Instance Profile
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: EC2Permissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - arn:aws:s3:::aws-codedeploy-us-east-1/*
+                  - arn:aws:s3:::aws-codedeploy-us-east-1
+              - Effect: Allow
+                Action:
+                  - cloudformation:SignalResource
+                Resource: "*"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+
+  # Security Group
   SSHSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow SSH to client host
-      GroupName: SSHSecurityGroup
+      GroupDescription: Allow SSH, HTTP, and Tomcat access
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 22
@@ -40,23 +75,26 @@ Resources:
           FromPort: 8080
           ToPort: 8080
           CidrIp: 0.0.0.0/0
+
+  # Instancia EC2
   Tomcat:
     Type: AWS::EC2::Instance
     CreationPolicy:
       ResourceSignal:
-        Timeout: PT5M
+        Timeout: PT15M  # Aumentamos el timeout a 15 minutos
         Count: 1
     Properties:
       ImageId: !Ref InstanceImage
       InstanceType: !Ref InstanceTypeParameter
       KeyName: vockey
+      IamInstanceProfile: !Ref EC2InstanceProfile  # Asignamos el Instance Profile
       SecurityGroups:
         - !Ref SSHSecurityGroup
       Tags:
         - Key: Name
-          Value: TomcatInstance
-      UserData: 
-        Fn::Base64: 
+          Value: !Ref InstanceName
+      UserData:
+        Fn::Base64:
           !Sub |
             #!/bin/bash -xe
             exec > /tmp/userdata.log 2>&1
@@ -68,9 +106,9 @@ Resources:
             pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
             ln -s /usr/local/init/ubuntu/cfn-hup /etc/init.d/cfn-hup
             #====================================================================#
-            #---------------------> INSTALACI?N DE AGENT <-----------------------#
+            #---------------------> INSTALACIÓN DE AGENT <-----------------------#
             #====================================================================#
-            #Comando para desactivar la actualizaci?n del Kernel
+            # Comando para desactivar la actualización del Kernel
             sed -i "s/#\$nrconf{kernelhints} = -1;/\$nrconf{kernelhints} = -1;/g" /etc/needrestart/needrestart.conf
 
             # Actualizamos la instancia
@@ -156,24 +194,17 @@ Resources:
             systemctl enable tomcat
 
             # Iniciamos tomcat
-            #systemctl start tomcat
-            #====================================================================#
-            #              CLONAR REPOSITORIO Y COMPILAR PROYECTO                #
-            #====================================================================#
-            # HE QUITADO ESTE APARTADO
-            
-            # Reiniciamos tomcat
-            # systemctl restart tomcat
+            systemctl start tomcat
 
             #====================================================================#
             # Este tiene que ser tu ultima instruccion del script
-            # Recuerda modificar el valor del --resource al id l?gico de la instancia
+            # Recuerda modificar el valor del --resource al id lógico de la instancia
             /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource Tomcat --region ${AWS::Region}
-# Salidas
+
 Outputs:
   AppHealthPoints:
     Description: URL del endpoint de salud de la app
-    Value: 
+    Value:
       Fn::Sub:
         - "http://${PUBLICDNS}:8080/studentify/api/health"
         - PUBLICDNS: !GetAtt Tomcat.PublicDnsName
