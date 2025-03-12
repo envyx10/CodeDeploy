@@ -33,8 +33,6 @@ jobs:
     - name: Deploy
       run: aws deploy create-deployment --application-name pruebafinal \
         --deployment-group-name Deploy \
-        --github-location repository-${{ github.repository }},commitID-${{ github.commits }} \
-        --region us-east-1 \
-        --file-exists-behavior OVERWRITE
-        
-        
+        --github-location repository-${{ github.repository }},commitId=${{ github.commits }}
+
+
