@@ -1,0 +1,77 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+# This workflow will build a Java project with Gradle and cache/restore any dependencies to improve the workflow execution time
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-gradle
+
+name: test
+
+on: # Evento de inicializacion cuando:
+  push:
+    branches: [ "main" ]     # Solo se ejecuta el PUSH en la rama main
+  pull_request:
+    branches: [ "main" ] 
+  workflow_dispatch:         # Esto es cuando estamos en periodo de desarrollo, para desarrollar.
+  
+jobs:
+  test:                      # Este nombre el que yo quiera ( es como definir un ID lógico en CloudFormation )
+
+    runs-on: ubuntu-22.04    # Donde se ejecuta en un ubuntu.latest ( crea contenedor con la ultima version de ubuntu ).
+    permissions:             # Definen los permisos que tiene esta ejecucion sobre el repositirio github.
+      contents: read         # En este caso solo puede leer lo que hay en github.
+      
+    #Pasos que se ejecutan de manera secuencial
+    
+    steps:
+    - uses: actions/checkout@v4        # Coge el code del repo y lo copia dentro del contenedor
+    - name: Set up JDK 21              # Montamos un JDK 21
+      uses: actions/setup-java@v4      # Esta accion instala JAVA
+      with:                            # Cuando la accion tiene parametros se le pone with
+        java-version: '21'
+        distribution: 'temurin'
+
+    # Configure Gradle for optimal use in GitHub Actions, including caching of downloaded dependencies.
+    # See: https://github.com/gradle/actions/blob/main/setup-gradle/README.md
+    
+    - name: Setup Gradle  # Configura gradle
+      uses: gradle/actions/setup-gradle@af1da67850ed9a4cedd57bfd976089dd991e2582 # v4.0.0
+
+    # AGREGADO NUEVO #
+    - name: Change Gradle Wrapper permissions
+      run: chmod +x gradlew
+      
+      #COMPILA
+    - name: test with Gradle Wrapper 
+      run: ./gradlew test
+
+    # NOTE: The Gradle Wrapper is the default and recommended way to run Gradle (https://docs.gradle.org/current/userguide/gradle_wrapper.html).
+    # If your project does not have the Gradle Wrapper configured, you can use the following configuration to run Gradle with a specified version.
+    #
+    # - name: Setup Gradle
+    #   uses: gradle/actions/setup-gradle@af1da67850ed9a4cedd57bfd976089dd991e2582 # v4.0.0
+    #   with:
+    #     gradle-version: '8.9'
+    #
+    # - name: Build with Gradle 8.9
+    #   run: gradle build
+
+  dependency-submission:     # Este es otro job
+
+    runs-on: ubuntu-latest   # otro contenedor
+    permissions:
+      contents: write        # Con permiso de escritura sobre github
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    # Generates and submits a dependency graph, enabling Dependabot Alerts for all project dependencies.
+    # See: https://github.com/gradle/actions/blob/main/dependency-submission/README.md
+    
+    - name: Generate and submit dependency graph # Lee el build.gradle, sus dependencias y explota el grafo de dependencias y lo sube a github 
+      uses: gradle/actions/dependency-submission@af1da67850ed9a4cedd57bfd976089dd991e2582 # v4.0.0
